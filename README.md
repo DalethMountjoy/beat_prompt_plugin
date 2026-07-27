@@ -10,21 +10,19 @@ Successor to the `screenwriting_daily` web app; it shares the same prompt corpus
 
 ## Install
 
-**You need Beat for macOS.** The plugin does not work on iOS.
+**Beat for macOS only** — the iOS versions don't support plugins.
 
-1. Download `Daily Scene Prompter <version>.zip` and unzip it. You'll get a folder called `Daily Scene Prompter.beatPlugin`.
-2. In Beat, open **Tools → Plugin Library**. This guarantees the plugins folder exists.
-3. Open the plugins folder in Finder. Beat is sandboxed, so it is buried:
+Grab the zip from the [latest release](https://github.com/DalethMountjoy/beat_prompt_plugin/releases/latest), unzip it, then drop `Daily Scene Prompter.beatPlugin` into Beat's plugin folder. The quickest way to reach that folder is **Tools → Plugin Library** and the **folder icon** in that window; failing that it's at:
 
-   ```
-   ~/Library/Containers/fi.KAPITAN.Beat/Data/Library/Application Support/Beat/Plugins
-   ```
+```
+~/Library/Containers/fi.KAPITAN.Beat/Data/Library/Application Support/Beat/Plugins
+```
 
-   Quickest route: hit `⌘⇧G` in Finder and paste that path.
-4. Drag `Daily Scene Prompter.beatPlugin` into it.
-5. Restart Beat. The plugin appears under **Tools → Daily Scene Prompter**.
+Restart Beat fully (`⌘Q`, not just closing the window — plugins are only scanned at launch) and it appears under **Tools → Daily Scene Prompter**.
 
-> **Note:** `Daily Scene Prompter.beatPlugin` is a *folder*, not a file. If macOS shows it as a single document, that's fine — Beat expects exactly that. Don't rename it; Beat finds `plugin.js` by the folder name.
+> `Daily Scene Prompter.beatPlugin` is a *folder*, though Finder may show it as one item. Don't rename it — Beat locates `plugin.js` by the folder name.
+
+**📖 [INSTALL.md](INSTALL.md) is the step-by-step version** — screenshots-level detail plus troubleshooting. That's the one to send someone who just wants it working.
 
 ---
 
@@ -77,15 +75,18 @@ Streaks are stored per-machine in Beat's own settings and are shared across ever
 
 ## Sharing it
 
-Everyone runs the same corpus with the same day-of-year seeding, so two people on separate machines see the same prompt on the same date without any server involved.
+Everyone runs the same corpus with the same day-of-year seeding, so two people on separate machines see the same prompt on the same date without any server involved. Nothing syncs; nothing needs to.
 
-To hand it to someone:
+To cut a new version for someone:
 
 ```bash
-./build.sh
+./build.sh                                          # test + package to dist/
+gh release create v1.1 "dist/Daily Scene Prompter 1.1.zip"
 ```
 
-This runs the tests, then writes `dist/Daily Scene Prompter <version>.zip`. Send them that file plus the install steps above.
+Then send them <https://github.com/DalethMountjoy/beat_prompt_plugin/releases/latest> — that link always resolves to the newest release, so it stays valid across updates, and it works without a GitHub account.
+
+> **Don't email the zip.** Google blocks `.js` attachments and enforces it *inside* archives too, so a zip containing `plugin.js` will bounce. A release link avoids the problem entirely. If you ever must send a file directly, put it on Drive or iCloud and share the link.
 
 ---
 
