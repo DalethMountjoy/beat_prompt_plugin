@@ -1,0 +1,6 @@
+# Packaged plugin zips — rebuilt from source by ./build.sh
+dist/
+
+# macOS metadata. Beat plugin folders are especially prone to collecting these,
+# and they ride along into the distributed zip if not excluded.
+.DS_Store

@@ -1,0 +1,671 @@
+<!--
+	Daily Scene Prompter — floating window UI.
+
+	This file is a TEMPLATE, not a standalone page. plugin.js reads it with
+	Beat.assetAsString() and substitutes four placeholders before handing it to
+	Beat.htmlWindow().
+
+	The placeholders are comment tokens of the form  #NAME#  wrapped in block
+	comment delimiters, and they appear further down in the script block:
+
+		DECK_JS   the full source of deck.js (the web view cannot read files
+		          out of the plugin bundle itself)
+		PROMPTS   the prompt corpus as a JSON array literal
+		STATE     the writer's saved streak/written-prompts state
+		FILTERS   the writer's saved genre/tone filter selection
+
+	Each token must appear EXACTLY ONCE in this file. plugin.js substitutes the
+	first occurrence only, so writing one out in full here — in a comment, in
+	documentation, anywhere — would consume the substitution and leave the real
+	one untouched, producing a blank panel. bundle.test.js enforces the count.
+
+	Beat wraps this fragment in its own <html>/<body>, so there is no doctype or
+	<head> here — that is the convention every bundled Beat plugin follows.
+
+	Everything in this file is presentation and event wiring. All selection,
+	filtering and streak logic lives in deck.js so it can be unit tested.
+-->
+
+<style>
+	/*
+		Palette lifted from the screenwriting_daily web app's design system so
+		the plugin and the site feel like one product. Beat's window follows the
+		system appearance, so both schemes are defined.
+	*/
+	:root {
+		--bg:        #f7f4ef;
+		--bg-card:   #ffffff;
+		--bg-inset:  #efece6;
+		--fg:        #1a1714;
+		--fg-muted:  #7c7268;
+		--fg-subtle: #a8a29c;
+		--border:    #e0dbd3;
+		--accent:    #c05428;
+		--accent-fg: #ffffff;
+
+		/*
+			Playfair Display and Geist Mono are webfonts on the site and are not
+			available offline, so these fall back through macOS system faces that
+			carry the same editorial/mono contrast.
+		*/
+		--font-display: "Iowan Old Style", "Palatino", Georgia, serif;
+		--font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		:root {
+			--bg:        #100f0d;
+			--bg-card:   #1a1814;
+			--bg-inset:  #242019;
+			--fg:        #ede9e2;
+			--fg-muted:  #7a7268;
+			--fg-subtle: #4a4640;
+			--border:    #2c2822;
+			--accent:    #d4663a;
+			--accent-fg: #16130f;
+		}
+	}
+
+	* { box-sizing: border-box; }
+
+	body {
+		margin: 0;
+		padding: 0;
+		background: var(--bg);
+		color: var(--fg);
+		font-family: var(--font-mono);
+		font-size: 12px;
+		line-height: 1.5;
+		-webkit-font-smoothing: antialiased;
+		/* The card scrolls internally; the window itself never scrolls. */
+		overflow: hidden;
+	}
+
+	#app {
+		display: flex;
+		flex-direction: column;
+		height: 100vh;
+	}
+
+	/* ---------------------------------------------------------------- *
+	 * Header — day counter and streak
+	 * ---------------------------------------------------------------- */
+
+	header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		padding: 10px 16px;
+		border-bottom: 1px solid var(--border);
+		background: var(--bg-card);
+		flex: 0 0 auto;
+	}
+
+	#dayLabel {
+		font-size: 10px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--fg-muted);
+	}
+
+	#streak {
+		font-size: 10px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--fg-muted);
+		display: flex;
+		align-items: center;
+		gap: 5px;
+	}
+
+	/* A live streak earns the accent colour; a lapsed one stays muted. */
+	#streak.is-live { color: var(--accent); }
+	#streak .flame { font-size: 12px; }
+
+	/* ---------------------------------------------------------------- *
+	 * Prompt card
+	 * ---------------------------------------------------------------- */
+
+	#card {
+		flex: 1 1 auto;
+		overflow-y: auto;
+		padding: 18px 16px 16px;
+		background: var(--bg);
+	}
+
+	#badge {
+		display: inline-block;
+		font-size: 9px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--accent);
+		border: 1px solid var(--accent);
+		border-radius: 2px;
+		padding: 2px 6px;
+		margin-bottom: 10px;
+	}
+
+	#badge.is-written {
+		color: var(--fg-subtle);
+		border-color: var(--fg-subtle);
+	}
+
+	#title {
+		font-family: var(--font-display);
+		font-size: 22px;
+		font-weight: 600;
+		line-height: 1.2;
+		margin: 0 0 8px;
+		letter-spacing: -0.01em;
+	}
+
+	#heading {
+		font-size: 11px;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--fg);
+		background: var(--bg-inset);
+		border-left: 2px solid var(--accent);
+		padding: 6px 9px;
+		margin-bottom: 12px;
+		/* Long sluglines must wrap rather than force the window wider. */
+		overflow-wrap: anywhere;
+	}
+
+	#description {
+		font-family: var(--font-display);
+		font-size: 15px;
+		line-height: 1.55;
+		margin: 0 0 14px;
+		color: var(--fg);
+	}
+
+	.meta-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+		margin-bottom: 8px;
+	}
+
+	.tag {
+		font-size: 9px;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		padding: 2px 6px;
+		border-radius: 2px;
+		background: var(--bg-inset);
+		color: var(--fg-muted);
+		border: 1px solid var(--border);
+	}
+
+	.tag.tone {
+		border-style: dashed;
+		font-style: italic;
+		letter-spacing: 0.04em;
+		text-transform: none;
+	}
+
+	.meta-label {
+		font-size: 9px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--fg-subtle);
+		margin-right: 2px;
+	}
+
+	.meta-value {
+		font-size: 11px;
+		color: var(--fg-muted);
+	}
+
+	#empty {
+		font-family: var(--font-display);
+		font-size: 14px;
+		color: var(--fg-muted);
+		text-align: center;
+		padding: 32px 12px;
+		line-height: 1.6;
+	}
+
+	/* ---------------------------------------------------------------- *
+	 * Actions
+	 * ---------------------------------------------------------------- */
+
+	#actions {
+		display: flex;
+		gap: 6px;
+		padding: 10px 16px;
+		border-top: 1px solid var(--border);
+		background: var(--bg-card);
+		flex: 0 0 auto;
+	}
+
+	button {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		letter-spacing: 0.02em;
+		padding: 7px 11px;
+		border-radius: 3px;
+		border: 1px solid var(--border);
+		background: var(--bg-inset);
+		color: var(--fg);
+		cursor: pointer;
+		transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+		white-space: nowrap;
+	}
+
+	button:hover:not(:disabled) { border-color: var(--fg-subtle); }
+	button:active:not(:disabled) { opacity: 0.75; }
+
+	button:disabled {
+		opacity: 0.45;
+		cursor: default;
+	}
+
+	button.primary {
+		background: var(--accent);
+		border-color: var(--accent);
+		color: var(--accent-fg);
+		font-weight: 600;
+		flex: 1 1 auto;
+	}
+
+	button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+	/* ---------------------------------------------------------------- *
+	 * Filters
+	 * ---------------------------------------------------------------- */
+
+	#filters {
+		padding: 10px 16px 12px;
+		border-top: 1px solid var(--border);
+		background: var(--bg);
+		flex: 0 0 auto;
+	}
+
+	.filter-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		font-size: 9px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--fg-subtle);
+		margin-bottom: 7px;
+	}
+
+	#poolCount { color: var(--fg-muted); }
+
+	#genreChips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
+		margin-bottom: 8px;
+	}
+
+	.chip {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		padding: 3px 7px;
+		border-radius: 10px;
+		border: 1px solid var(--border);
+		background: transparent;
+		color: var(--fg-muted);
+		cursor: pointer;
+		transition: all 120ms ease;
+	}
+
+	.chip:hover { border-color: var(--fg-subtle); }
+
+	.chip.is-on {
+		background: var(--accent);
+		border-color: var(--accent);
+		color: var(--accent-fg);
+	}
+
+	.filter-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	select {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		padding: 4px 6px;
+		border-radius: 3px;
+		border: 1px solid var(--border);
+		background: var(--bg-card);
+		color: var(--fg);
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+
+	label.toggle {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 10px;
+		color: var(--fg-muted);
+		cursor: pointer;
+		white-space: nowrap;
+	}
+
+	label.toggle input { margin: 0; }
+</style>
+
+<div id="app">
+	<header>
+		<span id="dayLabel"></span>
+		<span id="streak"></span>
+	</header>
+
+	<div id="card">
+		<div id="promptView"></div>
+	</div>
+
+	<div id="actions">
+		<button id="insertBtn" class="primary">Insert into script</button>
+		<button id="shuffleBtn" title="Draw another prompt from the filtered pool">Shuffle&nbsp;&#10227;</button>
+		<button id="writtenBtn" title="Count this prompt towards your streak">Mark written</button>
+	</div>
+
+	<div id="filters">
+		<div class="filter-head">
+			<span>Filter</span>
+			<span id="poolCount"></span>
+		</div>
+		<div id="genreChips"></div>
+		<div class="filter-row">
+			<select id="toneSelect"></select>
+			<label class="toggle" title="Hide prompts you have already marked written">
+				<input type="checkbox" id="hideWritten"> unwritten only
+			</label>
+			<button id="todayBtn" title="Return to today's prompt">Today</button>
+		</div>
+	</div>
+</div>
+
+<script>
+/* ==================================================================== *
+ * deck.js is spliced in here by plugin.js, defining window.Deck.
+ * ==================================================================== */
+
+/*#DECK_JS#*/
+
+/* ==================================================================== *
+ * Data injected by plugin.js
+ * ==================================================================== */
+
+var PROMPTS = /*#PROMPTS#*/;
+var state   = /*#STATE#*/;
+var filters = /*#FILTERS#*/;
+
+/* ==================================================================== *
+ * Bridge back to the plugin
+ * ==================================================================== */
+
+/**
+ * Calls a function on `Beat.custom` over in the plugin sandbox.
+ *
+ * Beat only accepts a string of JavaScript here, so the argument is embedded as
+ * a JSON literal. U+2028/U+2029 are legal inside JSON strings but terminate a
+ * line in JavaScript source, so they are escaped to keep the generated code
+ * parseable.
+ *
+ * @param {string} fn   function name on Beat.custom
+ * @param {*} [arg]     any JSON-serialisable value
+ */
+function callPlugin (fn, arg) {
+	// Absent when the file is opened directly in a browser for styling work.
+	if (typeof Beat === 'undefined') return
+
+	var literal = JSON.stringify(arg === undefined ? null : arg)
+		.replace(/\u2028/g, '\\u2028')
+		.replace(/\u2029/g, '\\u2029')
+
+	Beat.call('Beat.custom.' + fn + '(' + literal + ')')
+}
+
+/* ==================================================================== *
+ * View state
+ * ==================================================================== */
+
+var currentPrompt = null   // the prompt on screen
+var isShowingToday = true  // false once the writer shuffles away from today
+
+/**
+ * Escapes text for interpolation into innerHTML.
+ * Prompt copy is authored data, not user input, but it contains apostrophes,
+ * ampersands and quotes that must not be parsed as markup.
+ */
+function escapeHTML (text) {
+	return String(text == null ? '' : text)
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+}
+
+/** The prompts matching the current filter selection. */
+function pool () {
+	return Deck.filterPrompts(PROMPTS, {
+		genres: filters.genres,
+		tones: filters.tones,
+		hideWritten: filters.hideWritten,
+		writtenIds: state.writtenIds
+	})
+}
+
+/* ==================================================================== *
+ * Rendering
+ * ==================================================================== */
+
+function renderHeader () {
+	var today = new Date()
+	var streakEl = document.getElementById('streak')
+	var streak = Deck.currentStreak(state, Deck.isoDate(today))
+
+	document.getElementById('dayLabel').textContent = 'Day ' + Deck.dayOfYear(today)
+
+	if (streak > 0) {
+		streakEl.className = 'is-live'
+		streakEl.innerHTML = '<span class="flame">&#128293;</span>' +
+			streak + '-day streak'
+	} else {
+		streakEl.className = ''
+		// Show the record rather than a bare zero — there is more to come back to.
+		streakEl.textContent = state.longestStreak > 0
+			? 'best ' + state.longestStreak + ' days'
+			: 'no streak yet'
+	}
+}
+
+function renderPrompt () {
+	var view = document.getElementById('promptView')
+
+	if (!currentPrompt) {
+		view.innerHTML = '<div id="empty">Nothing matches those filters.<br>' +
+			'Loosen the genres, or switch off &ldquo;unwritten only&rdquo;.</div>'
+		setActionsEnabled(false)
+		return
+	}
+
+	var written = Deck.isWritten(state, currentPrompt.id)
+
+	// The badge tells the writer where this prompt came from — otherwise, after
+	// a shuffle, there is no way to tell whether you are still on today's.
+	var badgeText = written ? 'Written' : (isShowingToday ? "Today's prompt" : 'Shuffled')
+	var badgeClass = written ? ' class="is-written"' : ''
+
+	var html = '<div id="badge"' + badgeClass + '>' + escapeHTML(badgeText) + '</div>'
+	html += '<h1 id="title">' + escapeHTML(currentPrompt.title) + '</h1>'
+	html += '<div id="heading">' + escapeHTML(currentPrompt.scene_heading) + '</div>'
+	html += '<p id="description">' + escapeHTML(currentPrompt.description) + '</p>'
+
+	// Genre + tone
+	html += '<div class="meta-row">'
+	;(currentPrompt.genre || []).forEach(function (genre) {
+		html += '<span class="tag">' + escapeHTML(genre) + '</span>'
+	})
+	if (currentPrompt.tone) {
+		html += '<span class="tag tone">' + escapeHTML(currentPrompt.tone) + '</span>'
+	}
+	html += '</div>'
+
+	if (currentPrompt.suggested_characters && currentPrompt.suggested_characters.length) {
+		html += '<div class="meta-row"><span class="meta-label">Cast</span>' +
+			'<span class="meta-value">' +
+			currentPrompt.suggested_characters.map(escapeHTML).join(' &middot; ') +
+			'</span></div>'
+	}
+
+	if (currentPrompt.themes && currentPrompt.themes.length) {
+		html += '<div class="meta-row"><span class="meta-label">Themes</span>' +
+			'<span class="meta-value">' + escapeHTML(currentPrompt.themes.join(', ')) + '</span></div>'
+	}
+
+	view.innerHTML = html
+	document.getElementById('card').scrollTop = 0
+
+	setActionsEnabled(true)
+
+	var writtenBtn = document.getElementById('writtenBtn')
+	writtenBtn.disabled = written
+	writtenBtn.textContent = written ? '✓ Written' : 'Mark written'
+}
+
+function setActionsEnabled (enabled) {
+	document.getElementById('insertBtn').disabled = !enabled
+	document.getElementById('writtenBtn').disabled = !enabled
+}
+
+function renderFilters () {
+	var facets = Deck.facets(PROMPTS)
+	var chips = document.getElementById('genreChips')
+
+	chips.innerHTML = ''
+	facets.genres.forEach(function (genre) {
+		var chip = document.createElement('button')
+		chip.className = 'chip' + (filters.genres.indexOf(genre) !== -1 ? ' is-on' : '')
+		chip.textContent = genre
+		chip.onclick = function () { toggleGenre(genre) }
+		chips.appendChild(chip)
+	})
+
+	var select = document.getElementById('toneSelect')
+	if (!select.options.length) {
+		// Built once; the tone list never changes at runtime.
+		select.appendChild(new Option('Any tone', ''))
+		facets.tones.forEach(function (tone) { select.appendChild(new Option(tone, tone)) })
+	}
+	select.value = filters.tones.length ? filters.tones[0] : ''
+
+	document.getElementById('hideWritten').checked = !!filters.hideWritten
+
+	var count = pool().length
+	document.getElementById('poolCount').textContent =
+		count + (count === 1 ? ' prompt' : ' prompts')
+}
+
+function render () {
+	renderHeader()
+	renderFilters()
+	renderPrompt()
+}
+
+/* ==================================================================== *
+ * Actions
+ * ==================================================================== */
+
+function toggleGenre (genre) {
+	var index = filters.genres.indexOf(genre)
+	if (index === -1) filters.genres.push(genre)
+	else filters.genres.splice(index, 1)
+	onFiltersChanged()
+}
+
+function onFiltersChanged () {
+	filters.tones = document.getElementById('toneSelect').value
+		? [document.getElementById('toneSelect').value]
+		: []
+	filters.hideWritten = document.getElementById('hideWritten').checked
+
+	callPlugin('saveFilters', filters)
+
+	// If the prompt on screen no longer satisfies the filters, draw one that
+	// does — leaving a contradicting prompt visible is confusing.
+	var candidates = pool()
+	var stillValid = currentPrompt && candidates.some(function (p) { return p.id === currentPrompt.id })
+
+	if (!stillValid) {
+		currentPrompt = Deck.pickRandom(candidates, Math.random)
+		isShowingToday = false
+	}
+
+	render()
+}
+
+function shuffle () {
+	var candidates = pool()
+	var next = Deck.pickRandom(candidates, Math.random, currentPrompt ? currentPrompt.id : null)
+	if (!next) return
+
+	currentPrompt = next
+	isShowingToday = false
+	render()
+}
+
+function goToToday () {
+	currentPrompt = Deck.todaysPrompt(PROMPTS, new Date())
+	isShowingToday = true
+	render()
+}
+
+function insertPrompt () {
+	if (!currentPrompt) return
+	callPlugin('insertPrompt', currentPrompt.id)
+}
+
+function markWritten () {
+	if (!currentPrompt) return
+	// The plugin owns persistence; it writes to user defaults and then pushes
+	// the updated state back to us via applyState().
+	callPlugin('markWritten', currentPrompt.id)
+}
+
+/**
+ * Called BY the plugin (via htmlWindow.runJS) after it saves state.
+ * Keeping the plugin as the single writer avoids the two copies drifting apart.
+ *
+ * @param {Object} nextState
+ */
+function applyState (nextState) {
+	state = Deck.hydrate(nextState)
+	render()
+}
+
+/* ==================================================================== *
+ * Boot
+ * ==================================================================== */
+
+document.getElementById('insertBtn').onclick = insertPrompt
+document.getElementById('shuffleBtn').onclick = shuffle
+document.getElementById('writtenBtn').onclick = markWritten
+document.getElementById('todayBtn').onclick = goToToday
+document.getElementById('toneSelect').onchange = onFiltersChanged
+document.getElementById('hideWritten').onchange = onFiltersChanged
+
+state = Deck.hydrate(state)
+filters = {
+	genres: (filters && filters.genres) || [],
+	tones: (filters && filters.tones) || [],
+	hideWritten: !!(filters && filters.hideWritten)
+}
+
+goToToday()
+</script>

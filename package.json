@@ -1,0 +1,12 @@
+{
+  "name": "beat-scene-prompter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Daily Scene Prompter — a scene-prompt deck plugin for the Beat screenwriting app",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "build": "./build.sh",
+    "install-local": "./build.sh --install"
+  },
+  "license": "MIT"
+}
